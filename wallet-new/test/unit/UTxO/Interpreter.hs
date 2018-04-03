@@ -22,7 +22,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Text.Buildable
 import           Formatting (bprint, shown)
 import           Prelude (Show (..))
-import           Universum
+import           Universum hiding (id)
 
 import           Pos.Block.Logic
 import           Pos.Client.Txp
