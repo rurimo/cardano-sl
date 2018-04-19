@@ -170,7 +170,8 @@ deterministicTests wc = do
 
             map txId resp `shouldContain` [txId txn]
 
-        it "estimate fees of a well-formed transaction" $ do
+        -- NOTE Skipped until CSL-2493 is resolved.
+        xit "estimate fees of a well-formed transaction" $ do
             ws <- (,)
                 <$> (randomWallet >>= createWalletCheck)
                 <*> (randomWallet >>= createWalletCheck)
