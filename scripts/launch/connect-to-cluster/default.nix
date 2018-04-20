@@ -36,11 +36,11 @@ let
     };
   };
   executables =  {
-    wallet = "${iohkPkgs.cardano-sl-wallet-new}/bin/cardano-node";
+    wallet = "${iohkPkgs.cardano-sl-wallet-new-executable}/bin/cardano-node";
     explorer = "${iohkPkgs.cardano-sl-explorer-static}/bin/cardano-explorer";
   };
   ifWallet = localLib.optionalString (executable == "wallet");
-  iohkPkgs = import ./../../../default.nix { inherit config system pkgs gitrev; };
+  iohkPkgs = import ./../../../default.nix { inherit config system pkgs; gitrev = "GITREV"; };
   src = ./../../../.;
   topologyFileDefault = pkgs.writeText "topology-${environment}" ''
     wallet:
