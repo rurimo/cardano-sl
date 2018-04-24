@@ -40,7 +40,7 @@ let
     explorer = "${iohkPkgs.cardano-sl-explorer-static}/bin/cardano-explorer";
   };
   ifWallet = localLib.optionalString (executable == "wallet");
-  iohkPkgs = import ./../../../default.nix { inherit config system pkgs; gitrev = "GITREV"; };
+  iohkPkgs = import ./../../../default.nix { inherit config system pkgs gitrev; };
   src = ./../../../.;
   topologyFileDefault = pkgs.writeText "topology-${environment}" ''
     wallet:
