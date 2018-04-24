@@ -21,6 +21,7 @@ import           Data.Default (def)
 import qualified Data.HashMap.Strict as HM
 import           Data.List ((!!))
 import qualified Data.List.NonEmpty as NE
+import qualified Data.Map as M
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import           Data.Time.Units (toMicroseconds)
@@ -39,8 +40,8 @@ import           Pos.Client.Txp.Util (createTx)
 import           Pos.Core (BlockVersionData (bvdSlotDuration), IsBootstrapEraAddr (..),
                            Timestamp (..), deriveFirstHDAddress, makePubKeyAddress, mkCoin)
 import           Pos.Core.Configuration (genesisBlockVersionData, genesisSecretKeys)
-import           Pos.Core.Txp (TxAux, TxOut (..), TxOutAux (..), txaF)
-import           Pos.Crypto (EncryptedSecretKey, emptyPassphrase, encToPublic, fakeSigner,
+import           Pos.Core.Txp (TxAux (..), TxIn (TxInUtxo), TxOut (..), TxOutAux (..), txaF)
+import           Pos.Crypto (EncryptedSecretKey, emptyPassphrase, encToPublic, fakeSigner, hash,
                              safeToPublic, toPublic, withSafeSigners)
 import           Pos.Diffusion.Types (Diffusion (..))
 import           Pos.Txp (topsortTxAuxes)
@@ -102,25 +103,36 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
                                                    , "delay=" <> show delay_ ]
         liftIO $ T.hPutStrLn h "time,txCount,txType"
         txQueue <- atomically $ newTQueue
+        txQueue' <- atomically $ newTQueue
         -- prepare a queue with all transactions
         logInfo $ sformat ("Found "%shown%" keys in the genesis block.") (length keysToSend)
         startAtTxt <- liftIO $ lookupEnv "AUXX_START_AT"
         let startAt = fromMaybe 0 . readMaybe . fromMaybe "" $ startAtTxt :: Int
         -- construct transaction output
         outAddr <- makePubKeyAddressAuxx (toPublic (fromMaybe (error "sendToAllGenesis: no keys") $ head keysToSend))
-        let val1 = mkCoin 1
+        let val1 = mkCoin 1000000
             txOut1 = TxOut {
                 txOutAddress = outAddr,
                 txOutValue = val1
                 }
             txOuts = TxOutAux txOut1 :| []
+            val2 = mkCoin 1
+            txOut2 = TxOut {
+                txOutAddress = outAddr,
+                txOutValue = val2
+                }
+            txOuts2 = TxOutAux txOut2 :| []
         -- construct a transaction, and add it to the queue
         let addTx secretKey = do
                 utxo <- getOwnUtxoForPk $ safeToPublic (fakeSigner secretKey)
                 etx <- createTx mempty utxo (fakeSigner secretKey) txOuts (toPublic secretKey)
                 case etx of
                     Left err -> logError (sformat ("Error: "%build%" while trying to contruct tx") err)
-                    Right (tx, _) -> atomically $ writeTQueue txQueue (tx, txOuts)
+                    Right (tx, txOut1new) -> do
+                        logInfo $ "Utxo: " <> show utxo
+                        logInfo $ "txOut1new: " <> show txOut1new
+                        atomically (writeTQueue txQueue (tx, txOuts))
+                        atomically $ writeTQueue txQueue' (tx, txOut1new)
         let nTrans = conc * duration -- number of transactions we'll send
             allTrans = take nTrans (drop startAt keysToSend)
             (firstBatch, secondBatch) = splitAt ((2 * nTrans) `div` 3) allTrans
@@ -165,7 +177,7 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
         -- we'll be CPU bound and will not achieve high transaction
         -- rates. If we pre construct all the transactions, the
         -- startup time will be quite long.
-        forM_  firstBatch addTx
+        forM_ allTrans addTx -- forM_  firstBatch addTx
         -- Send transactions while concurrently writing the TPS numbers every
         -- slot duration. The 'writeTPS' action takes care to *always* write
         -- after every slot duration, even if it is killed, so as to
@@ -174,18 +186,24 @@ sendToAllGenesis diffusion (SendToAllGenesisParams duration conc delay_ tpsSentF
         -- While we're sending, we're constructing the second batch of
         -- transactions.
         logInfo "First batch first time started sending."
-        -- void $
+        void $
             -- concurrently (forM_ secondBatch addTx) $
-            -- concurrently writeTPS (sendTxsConcurrently duration)
+            concurrently writeTPS (sendTxsConcurrently duration)
         logInfo "First batch first time finished sending."
-        -- forM_ firstBatch addTx
-        -- logInfo "First batch second time started sending."
-        -- void $ concurrently writeTPS (sendTxsConcurrently duration)
-        -- logInfo "First batch second time finished sending."
         logInfo "Trying send starts."
-        let txOuts' = txOut1 :| []
-        send diffusion 0 txOuts'
-        logInfo "Trying send finished."
+        (atomically $ tryReadTQueue txQueue') >>= \case
+            Just (tx, txOut1new) -> do
+                let txInp     = TxInUtxo (hash (taTx tx)) 0
+                    utxo'     = M.fromList [(txInp, TxOutAux txOut1)]
+                    Just firstsKey = head keysToSend
+                logInfo $ "Utxo: " <> show utxo'
+                etx' <- createTx mempty utxo' (fakeSigner firstsKey) txOuts2 (toPublic firstsKey)
+                case etx' of
+                    Left err -> logError (sformat ("Error: "%build%" while trying to contruct tx") err)
+                    Right (tx', _) -> atomically $ writeTQueue txQueue (tx', txOuts)
+                sendTxs 1
+                logInfo "Trying send finished."
+            Nothing -> logInfo "No more transactions in the queue2."
 
 ----------------------------------------------------------------------------
 -- Casual sending
